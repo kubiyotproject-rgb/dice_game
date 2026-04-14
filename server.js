@@ -16,6 +16,13 @@ let turnIndex = 0;
 let gameOver = false;
 let gameStarted = false;
 
+function resetGame() {
+    players = [];
+    currentBet = null;
+    turnIndex = 0;
+    gameOver = false;
+}
+
 function rollDice(count = MAX_DICE) {
     return Array.from({ length: count }, () =>
         Math.floor(Math.random() * 6) + 1
@@ -82,7 +89,17 @@ function gameMessage(text) {
 function checkWinner() {
     if (players.length === 1) {
         gameOver = true;
-        io.emit("gameOver", { winner: players[0].name });
+
+        io.emit("gameOver", {
+            winner: players[0].name
+        });
+
+        // אחרי 3 שניות מאפסים את המשחק
+        setTimeout(() => {
+            resetGame();
+            io.emit("gameReset");
+            emitGameState();
+        }, 3000);
     }
 }
 
@@ -112,6 +129,10 @@ socket.on("startGame", () => {
 	});
 
     socket.on("joinGame", (name) => {
+
+	if (gameOver) {
+    resetGame();
+	}
 
     if (gameStarted) return; //חסימת הצטרפות אחרי התחלה
 
@@ -322,16 +343,22 @@ socket.on("startGame", () => {
     io.emit("updateBet", null);
 	});
 
-    socket.on("disconnect", () => {
+   socket.on("disconnect", () => {
 
-        players = players.filter(p => p.id !== socket.id);
+    players = players.filter(p => p.id !== socket.id);
 
-        if (turnIndex >= players.length) turnIndex = 0;
-
-        checkWinner();
-
+    if (players.length === 0) {
+        resetGame();
         emitGameState();
-    });
+        return;
+    }
+
+    if (turnIndex >= players.length) {
+        turnIndex = 0;
+    }
+
+    emitGameState();
+	});
 });
 
 const PORT = process.env.PORT || 3000;
