@@ -214,7 +214,7 @@ io.on("connection", (socket) => {
 
     gameMessageToRoom(
         roomId,
-        `${room.currentBet.playerName} הימר ${bet.count} על ${bet.number}`
+        `${room.currentBet.playerName} הימר ${bet.count} פעמים ${bet.number}`
     );
 
     io.to(roomId).emit("updateBet", room.currentBet);
