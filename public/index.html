@@ -46,11 +46,6 @@ background:#f5f5f5;
 
 <h1>קוביות</h1>
 
-<h2 id="lobbyStatus">בלובי</h2>
-
-<input id="roomInput" placeholder="שם חדר">
-<button onclick="createRoom()">צור חדר</button>
-
 <div id="gameLog">
 <h3>מהלך המשחק</h3>
 <div id="messages"></div>
@@ -60,6 +55,11 @@ background:#f5f5f5;
 
 <input id="nameInput" placeholder="שם">
 <button onclick="joinRoom()">הצטרף</button>
+
+<input id="roomInput" placeholder="שם חדר">
+
+<button onclick="createRoom()">צור חדר</button>
+<button onclick="joinRoom()">הצטרף לחדר</button>
 
 <hr>
 
@@ -124,9 +124,13 @@ function createRoom() {
 
     roomId = room;
 
-    socket.emit("createRoom", name, roomId);
+    socket.emit("createRoom", name, (id) => {
+        roomId = id;
+        alert("נוצר חדר: " + roomId);
 
-    join();
+        // מצטרפים אוטומטית לחדר
+        socket.emit("joinRoom", name, roomId);
+    });
 }
 
 function addMessage(text){
