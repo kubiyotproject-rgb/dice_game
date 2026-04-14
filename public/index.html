@@ -59,7 +59,7 @@ background:#f5f5f5;
 <h2 id="winner"></h2>
 
 <input id="nameInput" placeholder="שם">
-<button onclick="join()">הצטרף</button>
+<button onclick="joinRoom()">הצטרף</button>
 
 <hr>
 
@@ -122,10 +122,11 @@ function createRoom() {
     const name = document.getElementById("nameInput").value;
     const room = document.getElementById("roomInput").value;
 
-    socket.emit("createRoom", name, (id) => {
-        roomId = id;
-        alert("נוצר חדר: " + roomId);
-    });
+    roomId = room;
+
+    socket.emit("createRoom", name, roomId);
+
+    join();
 }
 
 function addMessage(text){
