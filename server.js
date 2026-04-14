@@ -137,6 +137,11 @@ io.on("connection", (socket) => {
     }
 
     emitRoomState(roomId);
+
+    const player = room.players.find(p => p.id === socket.id);
+    if (player) {
+        socket.emit("yourDice", player.dice);
+    }
 });
 
     socket.on("startGame", (roomId) => {
