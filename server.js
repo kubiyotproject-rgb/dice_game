@@ -45,10 +45,8 @@ function startNewRoundRoom(roomId) {
 
     room.players.forEach(p => {
         p.dice = rollDice(p.dice.length);
-        room.players.forEach(p => {
-    p.dice = rollDice(p.dice.length);
-    io.to(p.id).emit("yourDice", p.dice);
-});
+        io.to(p.id).emit("yourDice", p.dice);
+    });
 
     io.to(roomId).emit("updateBet", null);
 
