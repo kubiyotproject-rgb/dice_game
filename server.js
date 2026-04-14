@@ -10,18 +10,7 @@ app.use(express.static("public"));
 
 const MAX_DICE = 5;
 
-let players = [];
-let currentBet = null;
-let turnIndex = 0;
-let gameOver = false;
-let gameStarted = false;
-
-function resetGame() {
-    players = [];
-    currentBet = null;
-    turnIndex = 0;
-    gameOver = false;
-}
+let rooms = {};
 
 function rollDice(count = MAX_DICE) {
     return Array.from({ length: count }, () =>
@@ -41,22 +30,57 @@ function countDice(players, target) {
     return total;
 }
 
-function isMyTurn(socket) {
-    return players.length && players[turnIndex].id === socket.id;
+function generateRoomId() {
+    return Math.random().toString(36).substring(2, 7).toUpperCase();
 }
 
-function emitGameState() {
+function startNewRoundRoom(roomId) {
 
-    const totalDice = players.reduce((sum, p) => sum + p.dice.length, 0);
+    const room = rooms[roomId];
+    if (!room) return;
 
-    io.emit("gameState", {
-        players: players.map(p => ({
+    room.currentBet = null;
+
+    gameMessageToRoom(roomId, "סבב חדש התחיל");
+
+    room.players.forEach(p => {
+        p.dice = rollDice(p.dice.length);
+        room.players.forEach(p => {
+    p.dice = rollDice(p.dice.length);
+    io.to(p.id).emit("yourDice", p.dice);
+});
+
+    io.to(roomId).emit("updateBet", null);
+
+    emitRoomState(roomId);
+}
+
+function gameMessageToRoom(roomId, text) {
+    io.to(roomId).emit("gameMessage", text);
+}
+
+function emitRoomState(roomId) {
+
+    const room = rooms[roomId];
+    if (!room) return;
+
+    const totalDice = room.players.reduce((sum, p) => sum + p.dice.length, 0);
+
+    io.to(roomId).emit("gameState", {
+        players: room.players.map(p => ({
             id: p.id,
             name: p.name,
             diceCount: p.dice.length
         })),
-        turnPlayerId: players.length ? players[turnIndex].id : null,
-        gameOver,
+
+        turnPlayerId: room.players.length
+            ? room.players[room.turnIndex].id
+            : null,
+
+        gameOver: room.gameOver,
+        gameStarted: room.gameStarted,
+        hostId: room.hostId,
+
         stats: {
             totalDice,
             expected: totalDice / 3
@@ -64,42 +88,22 @@ function emitGameState() {
     });
 }
 
-function startNewRound(nextStarter = 0) {
-	
-	gameMessage("סבב חדש התחיל");
-	
-    currentBet = null;
+function checkWinnerRoom(roomId) {
 
-    players.forEach(p => {
-        p.dice = rollDice(p.dice.length);
-        io.to(p.id).emit("yourDice", p.dice);
-    });
+    const room = rooms[roomId];
+    if (!room) return;
 
-    turnIndex = nextStarter % players.length;
+    if (room.players.length === 1) {
 
-    io.emit("updateBet", null);
+        room.gameOver = true;
 
-    emitGameState();
-}
-
-function gameMessage(text) {
-    io.emit("gameMessage", text);
-}
-
-function checkWinner() {
-    if (players.length === 1) {
-        gameOver = true;
-
-        io.emit("gameOver", {
-            winner: players[0].name
+        io.to(roomId).emit("gameOver", {
+            winner: room.players[0].name
         });
 
-        // אחרי 3 שניות מאפסים את המשחק
         setTimeout(() => {
-            resetGame();
-            io.emit("gameReset");
-            emitGameState();
-        }, 3000);
+            delete rooms[roomId];
+        }, 10000);
     }
 }
 
@@ -108,216 +112,234 @@ function removeDice(player, amount = 1) {
     if (!player) return;
 
     player.dice.splice(0, amount);
-
-    if (player.dice.length < 0) player.dice = [];
 }
 
 io.on("connection", (socket) => {
 
-socket.on("startGame", () => {
+    socket.on("joinRoom", (name, roomId) => {
 
-    if (gameStarted) return;
-    if (players.length < 2) return;
+    const room = rooms[roomId];
+    if (!room) return;
 
-    gameStarted = true;
+    if (room.gameStarted) return;
+    if (room.players.find(p => p.id === socket.id)) return;
 
-    gameMessage("המשחק התחיל!");
-
-    startNewRound(0);
-
-    emitGameState();
-	});
-
-    socket.on("joinGame", (name) => {
-
-	if (gameOver) {
-    resetGame();
-	}
-
-    if (gameStarted) return; //חסימת הצטרפות אחרי התחלה
-
-    if (!name) return;
-    if (players.find(p => p.id === socket.id)) return;
-
-    players.push({
+    room.players.push({
         id: socket.id,
         name,
         dice: rollDice()
     });
 
-    gameMessage(name + " הצטרף למשחק");
+    socket.join(roomId);
 
-    emitGameState();
+    gameMessageToRoom(roomId, name + " הצטרף לחדר");
 
-    socket.emit("yourDice",
-        players.find(p => p.id === socket.id).dice
-    );
-	});
+    if (!room.hostId) {
+        room.hostId = socket.id;
+    }
 
-    socket.on("placeBet", (bet) => {
+    emitRoomState(roomId);
+});
 
-    if (gameOver) return;
-    if (!isMyTurn(socket)) return;
+    socket.on("startGame", (roomId) => {
+
+    const room = rooms[roomId];
+    if (!room) return;
+
+    if (socket.id !== room.hostId) return;
+    if (room.players.length < 2) return;
+    if (room.gameStarted) return;
+
+    room.gameStarted = true;
+    room.gameOver = false;
+    room.currentBet = null;
+
+    gameMessageToRoom(roomId, "המשחק התחיל!");
+
+    room.players.forEach(p => {
+        p.dice = rollDice();
+        io.to(roomId).emit("yourDice", p.dice);
+    });
+
+    room.turnIndex = 0;
+
+    emitRoomState(roomId);
+});
+
+   socket.on("placeBet", (bet, roomId) => {
+
+    const room = rooms[roomId];
+    if (!room) return;
+
+    if (room.gameOver || !room.gameStarted) return;
+    if (!room.players.length) return;
+
+    // בדיקת תור
+    if (room.players[room.turnIndex].id !== socket.id) return;
 
     if (!bet || !bet.count || !bet.number) return;
-
     if (bet.number < 2 || bet.number > 6) return;
     if (bet.count < 1) return;
 
-    // סך כל הקוביות במשחק
-    const totalDice = players.reduce(
+    // בדיקת סך קוביות
+    const totalDice = room.players.reduce(
         (sum, p) => sum + p.dice.length,
         0
     );
 
     if (bet.count > totalDice) return;
 
-    if (currentBet) {
+    // בדיקת חוקיות הימור מול הקודם
+    if (room.currentBet) {
 
-        const oldCount = currentBet.count;
-        const oldNumber = currentBet.number;
-
-        const newCount = bet.count;
-        const newNumber = bet.number;
+        const old = room.currentBet;
 
         const valid =
-            (newCount > oldCount) ||
-            (newCount === oldCount && newNumber > oldNumber);
+            bet.count > old.count ||
+            (bet.count === old.count && bet.number > old.number);
 
         if (!valid) return;
     }
 
-    currentBet = {
+    // שמירת ההימור
+    room.currentBet = {
         playerId: socket.id,
-        playerName: players.find(p => p.id === socket.id).name,
+        playerName: room.players.find(p => p.id === socket.id).name,
         count: bet.count,
         number: bet.number
     };
-	
-	gameMessage(
-    	currentBet.playerName +
-    	" הימר " +
-    	currentBet.count +
-    	" פעמים " +
-    	currentBet.number
-	);
-	
-    io.emit("updateBet", currentBet);
 
-    turnIndex = (turnIndex + 1) % players.length;
+    gameMessageToRoom(
+        roomId,
+        `${room.currentBet.playerName} הימר ${bet.count} על ${bet.number}`
+    );
 
-    emitGameState();
-	});
+    io.to(roomId).emit("updateBet", room.currentBet);
 
-    socket.on("halfToJoker", () => {
+    // מעבר תור
+    room.turnIndex = (room.turnIndex + 1) % room.players.length;
 
-        if (!currentBet) return;
-        if (!isMyTurn(socket)) return;
+    emitRoomState(roomId);
+});
 
-        const newCount = Math.ceil(currentBet.count / 2);
+   socket.on("halfToJoker", (roomId) => {
 
-        currentBet = {
-            playerId: socket.id,
-            playerName: players.find(p => p.id === socket.id).name,
-            count: newCount,
-            number: 1
-        };
+    const room = rooms[roomId];
+    if (!room) return;
+    if (!room || !room.currentBet) return;
 
-        io.emit("updateBet", currentBet);
+    if (room.players[room.turnIndex].id !== socket.id) return;
 
-        turnIndex = (turnIndex + 1) % players.length;
+    const newCount = Math.ceil(room.currentBet.count / 2);
 
-        emitGameState();
-    });
+    room.currentBet = {
+        playerId: socket.id,
+        playerName: room.players.find(p => p.id === socket.id).name,
+        count: newCount,
+        number: 1
+    };
 
-    socket.on("backToNormal", (number) => {
+    io.to(roomId).emit("updateBet", room.currentBet);
 
-        if (!currentBet) return;
-        if (!isMyTurn(socket)) return;
+    room.turnIndex = (room.turnIndex + 1) % room.players.length;
 
-        if (currentBet.number !== 1) return;
-        if (number < 2 || number > 6) return;
+    emitRoomState(roomId);
+});
 
-        currentBet = {
-            playerId: socket.id,
-            playerName: players.find(p => p.id === socket.id).name,
-            count: currentBet.count * 2 + 1,
-            number
-        };
+   socket.on("backToNormal", (number, roomId) => {
 
-        io.emit("updateBet", currentBet);
+    const room = rooms[roomId];
+    if (!room) return;
+    if (!room || !room.currentBet) return;
 
-        turnIndex = (turnIndex + 1) % players.length;
+    if (room.players[room.turnIndex].id !== socket.id) return;
 
-        emitGameState();
-    });
+    if (room.currentBet.number !== 1) return;
+    if (number < 2 || number > 6) return;
 
-    socket.on("callLiar", () => {
+    room.currentBet = {
+        playerId: socket.id,
+        playerName: room.players.find(p => p.id === socket.id).name,
+        count: room.currentBet.count * 2 + 1,
+        number
+    };
 
-    if (!currentBet) return;
+    io.to(roomId).emit("updateBet", room.currentBet);
 
-    const caller = players.find(p => p.id === socket.id);
-    const bettor = players.find(p => p.id === currentBet.playerId);
+    room.turnIndex = (room.turnIndex + 1) % room.players.length;
+
+    emitRoomState(roomId);
+});
+
+   socket.on("callLiar", (roomId) => {
+
+    const room = rooms[roomId];
+    if (!room) return;
+    if (!room || !room.currentBet) return;
+
+    const caller = room.players.find(p => p.id === socket.id);
+    const bettor = room.players.find(p => p.id === room.currentBet.playerId);
 
     if (!caller || !bettor) return;
 
-    io.emit("revealDice", players.map(p => ({
+    // חושפים קוביות לכולם
+    io.to(roomId).emit("revealDice", room.players.map(p => ({
         name: p.name,
         dice: p.dice
     })));
 
-    const total = countDice(players, currentBet.number);
+    const total = countDice(room.players, room.currentBet.number);
 
-    gameMessage(caller.name + " קרא שקר!");
+    gameMessageToRoom(roomId, `${caller.name} קרא שקר!`);
 
-    let loser;
-
-    if (total < currentBet.count) {
-        loser = bettor;
-    } else {
-        loser = caller;
-    }
+    let loser = total < room.currentBet.count ? bettor : caller;
 
     if (loser) {
-        gameMessage(loser.name + " הפסיד קובייה");
+        gameMessageToRoom(roomId, `${loser.name} הפסיד קובייה`);
         removeDice(loser, 1);
     }
 
-    players = players.filter(p => p.dice.length > 0);
+    // מחיקת שחקנים בלי קוביות
+    room.players = room.players.filter(p => p.dice.length > 0);
 
-    if (turnIndex >= players.length) turnIndex = 0;
+    // תיקון תור
+   if (room.players.length > 0) {
+    room.turnIndex = room.turnIndex % room.players.length;
+} else {
+    delete rooms[roomId];
+    return;
+}
 
-    checkWinner();
+    checkWinnerRoom(roomId);
 
-    if (!gameOver && players.length > 0) {
-        startNewRound(turnIndex);
+    if (!room.gameOver && room.players.length > 0) {
+        startNewRoundRoom(roomId);
     }
 
-    emitGameState();
-    io.emit("updateBet", null);
-	});
+    emitRoomState(roomId);
+    io.to(roomId).emit("updateBet", null);
+});
 
-    socket.on("callExact", () => {
+  socket.on("callExact", (roomId) => {
 
-    if (!currentBet) return;
+    const room = rooms[roomId];
+    if (!room || !room.currentBet) return;
 
-    const caller = players.find(p => p.id === socket.id);
+    const caller = room.players.find(p => p.id === socket.id);
     if (!caller) return;
 
-    const total = countDice(players, currentBet.number);
+    const total = countDice(room.players, room.currentBet.number);
 
-    io.emit("revealDice", players.map(p => ({
+    io.to(roomId).emit("revealDice", room.players.map(p => ({
         name: p.name,
         dice: p.dice
     })));
 
-    gameMessage(caller.name + " אמר בול!");
+    gameMessageToRoom(roomId, `${caller.name} אמר בול!`);
 
-    let correct = total === currentBet.count;
+    if (total === room.currentBet.count) {
 
-    if (correct) {
-
-        gameMessage(caller.name + " צדק וקיבל קובייה");
+        gameMessageToRoom(roomId, `${caller.name} צדק וקיבל קובייה`);
 
         if (caller.dice.length < MAX_DICE) {
             caller.dice.push(1);
@@ -325,39 +347,98 @@ socket.on("startGame", () => {
 
     } else {
 
-        gameMessage(caller.name + " טעה והפסיד קובייה");
+        gameMessageToRoom(roomId, `${caller.name} טעה והפסיד קובייה`);
         removeDice(caller, 1);
     }
 
-    players = players.filter(p => p.dice.length > 0);
+    room.players = room.players.filter(p => p.dice.length > 0);
 
-    if (turnIndex >= players.length) turnIndex = 0;
-
-    checkWinner();
-
-    if (!gameOver && players.length > 0) {
-        startNewRound(turnIndex);
+    if (room.turnIndex >= room.players.length) {
+        room.turnIndex = 0;
     }
 
-    emitGameState();
-    io.emit("updateBet", null);
-	});
+    checkWinnerRoom(roomId);
+
+    if (!room.gameOver && room.players.length > 0) {
+        startNewRoundRoom(roomId);
+    }
+
+    emitRoomState(roomId);
+    io.to(roomId).emit("updateBet", null);
+});
+
+   socket.on("createRoom", (name, callback) => {
+
+    const roomId = generateRoomId();
+
+    rooms[roomId] = {
+        players: [],
+        currentBet: null,
+        turnIndex: 0,
+        gameOver: false,
+        gameStarted: false,
+        hostId: socket.id
+    };
+
+    rooms[roomId].players.push({
+        id: socket.id,
+        name,
+        dice: rollDice()
+    });
+
+    socket.join(roomId);
+
+    callback(roomId);
+
+    gameMessageToRoom(roomId, name + " יצר חדר");
+
+    emitRoomState(roomId);
+
+    const player = rooms[roomId].players.find(p => p.id === socket.id);
+
+    if (player) {
+    socket.emit("yourDice", player.dice);}
+});
 
    socket.on("disconnect", () => {
 
-    players = players.filter(p => p.id !== socket.id);
+    // לעבור על כל החדרים ולמצוא איפה השחקן נמצא
+    for (const roomId in rooms) {
 
-    if (players.length === 0) {
-        resetGame();
-        emitGameState();
-        return;
+        const room = rooms[roomId];
+
+        const playerIndex = room.players.findIndex(p => p.id === socket.id);
+
+        if (playerIndex !== -1) {
+
+            const wasHost = room.hostId === socket.id;
+
+            // מחיקת השחקן
+            room.players.splice(playerIndex, 1);
+
+            gameMessageToRoom(roomId, "שחקן עזב את המשחק");
+
+            // אם אין שחקנים בכלל → מוחקים חדר
+            if (room.players.length === 0) {
+                delete rooms[roomId];
+                return;
+            }
+
+            // אם ה-host עזב → ממנים חדש
+            if (wasHost) {
+                room.hostId = room.players[0].id;
+                gameMessageToRoom(roomId, "הוסט חדש מונה");
+            }
+
+            // תיקון תור אם צריך
+            if (room.turnIndex >= room.players.length) {
+                room.turnIndex = 0;
+            }
+
+            emitRoomState(roomId);
+            break;
+        }
     }
-
-    if (turnIndex >= players.length) {
-        turnIndex = 0;
-    }
-
-    emitGameState();
 	});
 });
 

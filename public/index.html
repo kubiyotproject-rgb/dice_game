@@ -46,6 +46,11 @@ background:#f5f5f5;
 
 <h1>קוביות</h1>
 
+<h2 id="lobbyStatus">בלובי</h2>
+
+<input id="roomInput" placeholder="שם חדר">
+<button onclick="createRoom()">צור חדר</button>
+
 <div id="gameLog">
 <h3>מהלך המשחק</h3>
 <div id="messages"></div>
@@ -61,7 +66,7 @@ background:#f5f5f5;
 <h2>שחקנים</h2>
 <ul id="players"></ul>
 
-<button onclick="startGame()">התחל משחק</button>
+<button id="startBtn" onclick="startGame()">התחל משחק</button>
 
 <hr>
 
@@ -108,6 +113,20 @@ background:#f5f5f5;
 
 const socket = io();
 
+let roomId = null;
+let gameStarted = false;
+let hostId = null;
+
+function createRoom() {
+
+    const name = document.getElementById("nameInput").value;
+    const room = document.getElementById("roomInput").value;
+
+    socket.emit("createRoom", name, (id) => {
+        roomId = id;
+        alert("נוצר חדר: " + roomId);
+    });
+}
 
 function addMessage(text){
 
@@ -130,18 +149,31 @@ socket.on("connect", () => {
     myId = socket.id;
 });
 
+function joinRoom() {
+
+    const name = document.getElementById("nameInput").value;
+    const room = document.getElementById("roomInput").value;
+
+    roomId = room;
+
+    socket.emit("joinRoom", name, roomId);
+}
+
 function join(){
 
     const name = document.getElementById("nameInput").value;
 
     if(!name || joined) return;
 
-    socket.emit("joinGame", name);
+    socket.emit("joinGame", name, roomId);
 
     joined = true;
 }
 
 socket.on("gameState", (state)=>{
+
+    gameStarted = state.gameStarted;
+    hostId = state.hostId;
 
     const list = document.getElementById("players");
     list.innerHTML="";
@@ -163,6 +195,17 @@ socket.on("gameState", (state)=>{
             `סה"כ קוביות: ${state.stats.totalDice} | ממוצע: ${state.stats.expected.toFixed(1)}`;
     }
 
+    const lobby = document.getElementById("lobbyStatus");
+    if (lobby) {
+        lobby.innerText = gameStarted ? "במשחק" : "בלובי";
+    }
+
+    const btn = document.getElementById("startBtn");
+    if (btn) {
+        const isHost = myId === hostId;
+        btn.style.display =
+            (isHost && !gameStarted) ? "inline-block" : "none";
+    }
 });
 
 socket.on("yourDice",(dice)=>{
@@ -212,23 +255,23 @@ function placeBet(){
 
         count:parseInt(document.getElementById("betCount").value),
         number:parseInt(document.getElementById("betNumber").value)
-    });
+    }, roomId);
 }
 
 function callLiar(){
-    socket.emit("callLiar");
+    socket.emit("callLiar", roomId);
 }
 
 function callExact(){
-    socket.emit("callExact");
+    socket.emit("callExact", roomId);
 }
 
 function startGame() {
-    socket.emit("startGame");
+    socket.emit("startGame", roomId);
 }
 
 function halfBet(){
-    socket.emit("halfToJoker");
+    socket.emit("halfToJoker", roomId);
 }
 
 function backToNormal(){
@@ -237,7 +280,7 @@ function backToNormal(){
 
     if(!num) return;
 
-    socket.emit("backToNormal",num);
+    socket.emit("backToNormal", num, roomId);
 }
 
 </script>
